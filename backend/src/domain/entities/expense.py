@@ -35,7 +35,7 @@ class Expense:
     computed = Money.sum([split.owed for split in self.splits], self.total.currency)
     if computed != self.total:
       raise InvalidExpenseError(
-        f"Sum of splits {computed.amount_cent} does not match total {self.total.amount_cent}"
+        f"Sum of splits {computed.amount_cents} does not match total {self.total.amount_cents}"
       )
 
 

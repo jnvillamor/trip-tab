@@ -11,11 +11,11 @@ class CurrencyMismatchError(DomainError):
 
 @dataclass(frozen=True)
 class Money:
-  amount_cent: int
+  amount_cents: int
   currency: str = DEFAULT_CURRENCY
 
   def __post_init__(self) -> None:
-    if not isinstance(self.amount_cent, int):
+    if not isinstance(self.amount_cents, int):
       raise ValueError("Money amount must be an integer representing cents")
     if len(self.currency) != 3:
       raise ValueError("Currency must be a 3-letter ISO code")
@@ -28,7 +28,7 @@ class Money:
   @property
   def major_units(self) -> float:
     """Return the amount in major currency units (e.g., dollars, euros)."""
-    return self.amount_cent / 100.0
+    return self.amount_cents / 100.0
 
   def _check_currency(self, other: "Money") -> None:
     if self.currency != other.currency:
@@ -36,31 +36,31 @@ class Money:
 
   def __add__(self, other: "Money") -> "Money":
     self._check_currency(other)
-    return Money(self.amount_cent + other.amount_cent, self.currency)
+    return Money(self.amount_cents + other.amount_cents, self.currency)
 
   def __sub__(self, other: "Money") -> "Money":
     self._check_currency(other)
-    return Money(self.amount_cent - other.amount_cent, self.currency)
+    return Money(self.amount_cents - other.amount_cents, self.currency)
 
   def __neg__(self) -> "Money":
-    return Money(-self.amount_cent, self.currency)
+    return Money(-self.amount_cents, self.currency)
 
   def __lt__(self, other: "Money") -> bool:
     self._check_currency(other)
-    return self.amount_cent < other.amount_cent
+    return self.amount_cents < other.amount_cents
 
   def __le__(self, other: "Money") -> bool:
     self._check_currency(other)
-    return self.amount_cent <= other.amount_cent
+    return self.amount_cents <= other.amount_cents
 
   def is_zero(self) -> bool:
-    return self.amount_cent == 0
+    return self.amount_cents == 0
 
   def is_positive(self) -> bool:
-    return self.amount_cent > 0
+    return self.amount_cents > 0
 
   def is_negative(self) -> bool:
-    return self.amount_cent < 0
+    return self.amount_cents < 0
 
   def __str__(self) -> str:
     return f"{self.major_units:.2f} {self.currency}"
