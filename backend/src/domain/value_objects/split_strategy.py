@@ -47,11 +47,27 @@ class EqualSplitStrategy(SplitStrategy):
       raise InvalidSplitStrategyError("Participants do not match the specified amounts.")
 
     lines = [SplitLine(user_id=uid, owed=self._amounts[uid]) for uid in participants]
-    computed_total = sum(line.owed.amount_cent for line in lines)
+    computed_total = sum(line.owed.amount_cents for line in lines)
 
-    if computed_total != total.amount_cent:
+    if computed_total != total.amount_cents:
       raise InvalidSplitStrategyError(
-        f"Computed total {computed_total} does not match the specified total {total.amount_cent}"
+        f"Computed total {computed_total} does not match the specified total {total.amount_cents}"
+      )
+    return lines
+
+class ExactSplitStrategy(SplitStrategy):
+  def __init__(self, amounts: dict[UserId, Money]):
+    self._amounts = amounts
+
+  def split(self, total: Money, participants: list[UserId]) -> list[SplitLine]:
+    if set(self._amounts.keys()) != set(participants):
+      raise InvalidSplitStrategyError("Participants do not match the specified amounts.")
+
+    lines = [SplitLine(user_id, self._amounts[user_id]) for user_id in participants]
+    computed_total = sum(line.owed.amount_cents for line in lines)
+    if computed_total != total.amount_cents:
+      raise InvalidSplitStrategyError(
+        f"Computed total {computed_total} does not match the specified total {total.amount_cents}"
       )
     return lines
 
@@ -70,10 +86,10 @@ class PercentageSplitStrategy(SplitStrategy):
       raise InvalidSplitStrategyError("Participants do not match the specified percentages.")
 
     raw_cents = {
-      uid: total.amount_cent * pct / 100.0 for uid, pct in self._percentages.items()
+      uid: total.amount_cents * pct / 100.0 for uid, pct in self._percentages.items()
     }
     distributed_cents = self._largest_remainder_distribute(
-      total.amount_cent, raw_cents, participants
+      total.amount_cents, raw_cents, participants
     )
 
-    return [SplitLine(user_id=uid, owed=Money(amount_cent=distributed_cents[uid], currency=total.currency)) for uid in participants]
+    return [SplitLine(user_id=uid, owed=Money(amount_cents=distributed_cents[uid], currency=total.currency)) for uid in participants]
