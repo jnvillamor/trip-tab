@@ -27,6 +27,10 @@ class Group:
     if not any(member.user_id == self.created_by for member in self.members):
       raise GroupMembershipError("The creator must be a member of the group.")
 
+  def create(cls, name: str, created_by: UserId) -> Group:
+    group = cls(id=id, name=name, created_by=created_by)
+    return group
+
   def has_member(self, user_id: UserId) -> bool:
     return any(member.user_id == user_id for member in self.members)
 
