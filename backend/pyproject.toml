@@ -13,7 +13,3 @@ addopts = [
   "--strict-config",
   "--import-mode=importlib",
 ]
-xfail_strict = true
-markers = [
-  "known_bug: documents behavior that is currently broken in production code",
-]
