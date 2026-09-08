@@ -6,7 +6,7 @@ import pytest
 
 from domain.entities.settlement import InvalidSettlementError, Settlement
 from domain.value_objects.ids import SettlementId
-from tests.builders import make_settlement, money
+from tests.builders import id_for, make_settlement, money
 
 
 class TestCreation:
@@ -59,15 +59,15 @@ class TestReversal:
 
   def test_create_reversal_swaps_the_direction_and_keeps_the_amount(self, alice, bob, group_id):
     original = make_settlement(
-      id=SettlementId("s1"), group_id=group_id, from_user=bob, to_user=alice, amount=money(5_000)
+      id=id_for(SettlementId, "original"), group_id=group_id, from_user=bob, to_user=alice, amount=money(5_000)
     )
 
-    reversal = Settlement.create_reversal(SettlementId("s2"), original)
+    reversal = Settlement.create_reversal(id_for(SettlementId, "reversal"), original)
 
     assert (reversal.from_user, reversal.to_user) == (alice, bob)
     assert reversal.amount == money(5_000)
     assert reversal.group_id == group_id
-    assert reversal.reverses == SettlementId("s1")
+    assert reversal.reverses == id_for(SettlementId, "original")
     assert reversal.is_reversal() is True
 
   def test_mark_reversed_stamps_the_original(self, alice, bob):
@@ -93,8 +93,8 @@ class TestReversal:
       Settlement.create_reversal(SettlementId.new(), original)
 
   def test_a_reversal_cannot_itself_be_reversed(self, alice, bob):
-    original = make_settlement(id=SettlementId("s1"), from_user=bob, to_user=alice)
-    reversal = Settlement.create_reversal(SettlementId("s2"), original)
+    original = make_settlement(id=id_for(SettlementId, "original"), from_user=bob, to_user=alice)
+    reversal = Settlement.create_reversal(id_for(SettlementId, "reversal"), original)
 
     with pytest.raises(InvalidSettlementError, match="cannot be reversed again"):
-      Settlement.create_reversal(SettlementId("s3"), reversal)
+      Settlement.create_reversal(id_for(SettlementId, "second-reversal"), reversal)

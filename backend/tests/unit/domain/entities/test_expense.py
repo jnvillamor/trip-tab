@@ -3,18 +3,18 @@ from __future__ import annotations
 import pytest
 
 from domain.entities.expense import Expense, InvalidExpenseError
-from domain.value_objects.ids import ExpenseId, GroupId
+from domain.value_objects.ids import ExpenseId, GroupId, UserId
 from domain.value_objects.money import Money
 from domain.value_objects.split_strategy import (
   ExactSplitStrategy,
   InvalidSplitStrategyError,
   SplitLine,
 )
-from tests.builders import make_expense, money
+from tests.builders import id_for, make_expense, money
 
 
-def owed_cents(expense: Expense) -> dict[str, int]:
-  return {str(line.user_id): line.owed.amount_cents for line in expense.splits}
+def owed_cents(expense: Expense) -> dict[UserId, int]:
+  return {line.user_id: line.owed.amount_cents for line in expense.splits}
 
 
 class TestCreation:
@@ -30,7 +30,7 @@ class TestCreation:
     assert expense.group_id == group_id
     assert expense.paid_by == alice
     assert expense.total == money(10_000)
-    assert owed_cents(expense) == {"alice": 5_000, "bob": 5_000}
+    assert owed_cents(expense) == {alice: 5_000, bob: 5_000}
 
   def test_defaults_to_not_deleted_with_a_timezone_aware_timestamp(self, alice):
     expense = make_expense(paid_by=alice)
@@ -75,7 +75,7 @@ class TestCreateFactory:
     strategy = ExactSplitStrategy({alice: money(6_000), bob: money(4_000)})
 
     expense = Expense.create(
-      id=ExpenseId("expense-1"),
+      id=id_for(ExpenseId, "boat-rental"),
       group_id=group_id,
       description="Boat rental",
       total=money(10_000),
@@ -84,8 +84,8 @@ class TestCreateFactory:
       participants=[alice, bob],
     )
 
-    assert owed_cents(expense) == {"alice": 6_000, "bob": 4_000}
-    assert expense.id == ExpenseId("expense-1")
+    assert owed_cents(expense) == {alice: 6_000, bob: 4_000}
+    assert expense.id == id_for(ExpenseId, "boat-rental")
     assert expense.deleted is False
 
   def test_a_strategy_that_does_not_balance_is_rejected(self, alice, bob, group_id: GroupId):
@@ -122,7 +122,7 @@ class TestEdit:
     )
 
     assert expense.total == money(20_000)
-    assert owed_cents(expense) == {"alice": 12_000, "bob": 8_000}
+    assert owed_cents(expense) == {alice: 12_000, bob: 8_000}
 
   def test_changing_the_participants_recomputes_the_splits(self, alice, bob, carol):
     expense = make_expense(paid_by=alice, participants=[alice, bob], total=money(9_000))
@@ -134,7 +134,7 @@ class TestEdit:
       ),
     )
 
-    assert owed_cents(expense) == {"alice": 3_000, "bob": 3_000, "carol": 3_000}
+    assert owed_cents(expense) == {alice: 3_000, bob: 3_000, carol: 3_000}
 
   def test_changing_the_total_without_a_strategy_is_rejected(self, alice, bob):
     expense = make_expense(paid_by=alice, participants=[alice, bob], total=money(10_000))
@@ -163,7 +163,7 @@ class TestEdit:
     expense.edit()
 
     assert expense.description == "Dinner"
-    assert owed_cents(expense) == {"alice": 5_000, "bob": 5_000}
+    assert owed_cents(expense) == {alice: 5_000, bob: 5_000}
 
 
 class TestDeletion:

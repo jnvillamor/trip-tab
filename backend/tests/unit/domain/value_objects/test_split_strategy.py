@@ -13,7 +13,7 @@ from domain.value_objects.split_strategy import (
   SplitStrategy,
   SplitType,
 )
-from tests.builders import money
+from tests.builders import id_for, money
 
 
 def owed_cents(lines: list[SplitLine]) -> dict[UserId, int]:
@@ -131,7 +131,7 @@ class TestPercentageSplitStrategy:
   )
   def test_rejects_percentages_that_do_not_sum_to_100(self, percentages: dict[str, float]):
     with pytest.raises(InvalidSplitStrategyError, match="must sum to 100"):
-      PercentageSplitStrategy({UserId(uid): pct for uid, pct in percentages.items()})
+      PercentageSplitStrategy({id_for(UserId, label): pct for label, pct in percentages.items()})
 
   @pytest.mark.parametrize("bad_pct", [-1.0, 101.0])
   def test_rejects_percentages_outside_0_to_100(self, alice, bob, bad_pct: float):
@@ -151,7 +151,7 @@ class TestLargestRemainderDistribution:
   @pytest.mark.parametrize("total_cents", [0, 1, 2, 7, 99, 100, 101, 1_000_003])
   @pytest.mark.parametrize("participant_count", [1, 2, 3, 7])
   def test_distributes_exactly_the_total(self, total_cents: int, participant_count: int):
-    participants = [UserId(f"u{i}") for i in range(participant_count)]
+    participants = [id_for(UserId, f"u{i}") for i in range(participant_count)]
     raw = {uid: total_cents / participant_count for uid in participants}
 
     distributed = SplitStrategy._largest_remainder_distribute(total_cents, raw, participants)

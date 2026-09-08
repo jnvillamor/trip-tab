@@ -6,6 +6,7 @@ test only has to spell out the one field it actually cares about.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
 from domain.entities.expense import Expense
@@ -18,6 +19,18 @@ from domain.value_objects.split_strategy import SplitLine
 
 CURRENCY = "PHP"
 """Currency used by every builder unless a test overrides it."""
+
+_TEST_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+
+def id_for(id_type, label: str):
+  """A stable, valid UUID for a readable label.
+
+  Ids validate as UUIDs, so tests cannot use `UserId("alice")`. Deriving the uuid from the
+  label keeps them deterministic: `id_for(UserId, "alice")` is the same value in every run
+  and every test, so a failure message can be traced back to a name.
+  """
+  return id_type(str(uuid.uuid5(_TEST_NAMESPACE, f"{id_type.__name__}:{label}")))
 
 
 def money(cents: int, currency: str = CURRENCY) -> Money:
