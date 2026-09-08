@@ -3,3 +3,6 @@ class ApplicationError(Exception):
 
 class NotFoundError(ApplicationError):
   """Raised when a requested resource is not found."""
+
+class NotAuthorizedError(ApplicationError):
+  """Raised when a user is not authorized to perform an action."""
