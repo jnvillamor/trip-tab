@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 
 from domain.exceptions import DomainError
 from domain.value_objects.ids import UserId
@@ -9,6 +10,15 @@ from domain.value_objects.money import Money
 
 class InvalidSplitStrategyError(DomainError):
   """Raised for invalid split strategy operations."""
+
+class SplitType(str, Enum):
+  """The kinds of split a strategy can implement."""
+  EQUAL = "equal"
+  EXACT = "exact"
+  PERCENTAGE = "percentage"
+
+  def __str__(self) -> str:
+    return self.value
 
 @dataclass(frozen=True)
 class SplitLine:
