@@ -29,4 +29,4 @@ class GetGroupBalancesUseCase:
     net = BalanceEngine.compute_net_balance(group_expenses, group_settlements)
     pairwise = BalanceEngine.compute_pairwise_balance(group_expenses, group_settlements)
 
-    return GroupBalancesView(net=net, pairwise=pairwise)
+    return GroupBalancesView.from_domain(net_balances=net, pairwise_balances=pairwise)
