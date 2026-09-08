@@ -29,6 +29,9 @@ class InMemoryGroupRepository(GroupRepository):
 
     self.deleted: list[GroupId] = []
 
+    self.queried_users: list[UserId] = []
+    """Every user id passed to `get_for_user`, in order, so reads can be asserted too."""
+
   def get_by_id(self, group_id: GroupId) -> Group | None:
     stored = self._groups.get(group_id)
     return copy.deepcopy(stored) if stored is not None else None
@@ -38,6 +41,7 @@ class InMemoryGroupRepository(GroupRepository):
     self.saved.append(copy.deepcopy(group))
 
   def get_for_user(self, user_id: UserId) -> list[Group]:
+    self.queried_users.append(user_id)
     return [copy.deepcopy(g) for g in self._groups.values() if g.has_member(user_id)]
 
   def delete(self, group_id: GroupId) -> None:
