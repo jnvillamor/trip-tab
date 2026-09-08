@@ -24,7 +24,7 @@ class BalanceEngine:
   def compute_net_balance(expenses: list[Expense], settlements: list[Settlement]) -> dict[UserId, Money]:
     """ Computes the net balance of each user given a list of expenses and settlements. """
     currency = BalanceEngine._resolve_currency(expenses, settlements)
-    net_cents = dict[UserId, int] = defaultdict(int)
+    net_cents: dict[UserId, int] = defaultdict(int)
 
     for expense in expenses:
       if expense.deleted:
@@ -37,9 +37,9 @@ class BalanceEngine:
         net_cents[split.user_id] -= split.owed.amount_cents
         net_cents[expense.paid_by] += split.owed.amount_cents
 
-      for settlement in settlements:
-        net_cents[settlement.from_user] += settlement.amount.amount_cents
-        net_cents[settlement.to_user] -= settlement.amount.amount_cents
+    for settlement in settlements:
+      net_cents[settlement.from_user] += settlement.amount.amount_cents
+      net_cents[settlement.to_user] -= settlement.amount.amount_cents
 
     return {uid: Money(cents, currency) for uid, cents in net_cents.items() if cents != 0}
 
@@ -62,7 +62,12 @@ class BalanceEngine:
         owed_cents[(split.user_id, expense.paid_by)] += split.owed.amount_cents
 
     for settlement in settlements:
-      owed_cents[(settlement.to_user, settlement.from_user)] -= settlement.amount.amount_cents
+      # A payment from from_user to to_user REDUCES what from_user
+      # owes to_user — the opposite effect of an expense debt. Model
+      # that by contributing to the reverse pair, so the later
+      # (a_owes_b - b_owes_a) netting step correctly cancels it out
+      # instead of stacking it on top of the expense debt.
+      owed_cents[(settlement.to_user, settlement.from_user)] += settlement.amount.amount_cents
 
     result: dict[tuple[UserId, UserId], Money] = {}
     seen_pairs: set[frozenset[UserId]] = set()
