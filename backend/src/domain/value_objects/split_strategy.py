@@ -49,21 +49,17 @@ class SplitStrategy(ABC):
     return floored
 
 class EqualSplitStrategy(SplitStrategy):
-  def __init__(self, amounts: dict[UserId, Money]):
-    self._amounts = amounts
-
   def split(self, total: Money, participants: list[UserId]) -> list[SplitLine]:
-    if set(self._amounts.keys()) != set(participants):
-      raise InvalidSplitStrategyError("Participants do not match the specified amounts.")
+    if not participants:
+      raise InvalidSplitStrategyError("No participants provided for equal split.")
 
-    lines = [SplitLine(user_id=uid, owed=self._amounts[uid]) for uid in participants]
-    computed_total = sum(line.owed.amount_cents for line in lines)
+    num_participants = len(participants)
+    base_cents, remainder = divmod(total.amount_cents, num_participants)
 
-    if computed_total != total.amount_cents:
-      raise InvalidSplitStrategyError(
-        f"Computed total {computed_total} does not match the specified total {total.amount_cents}"
-      )
-    return lines
+    return [
+      SplitLine(uid, Money(base_cents + (1 if i < remainder else 0), total.currency))
+      for i, uid in enumerate(participants)
+    ]
 
 class ExactSplitStrategy(SplitStrategy):
   def __init__(self, amounts: dict[UserId, Money]):
