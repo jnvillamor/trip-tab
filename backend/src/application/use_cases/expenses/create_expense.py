@@ -16,7 +16,7 @@ from domain.value_objects.split_strategy import SplitType
 class CreateExpenseInput:
   group_id: str
   description: str
-  total_cents: str
+  total_cents: int
   paid_by: str
   participants_ids: list[str]
   split_type: str # "equal", "exact", "percentage"
@@ -43,7 +43,7 @@ class CreateExpenseUseCase:
 
     # Check if all participants, including the payer, are members of the group
     for participant in { paid_by, *participants }:
-      if participant not in group.members:
+      if not group.has_member(participant):
         raise NotAuthorizedError(f"User {participant} is not a member of the group {group_id}.")
 
     total = Money(amount_cents=input_data.total_cents, currency="PHP")
@@ -51,7 +51,7 @@ class CreateExpenseUseCase:
       split_type=input_data.split_type,
       currency=total.currency,
       exact_amounts_cents=input_data.exact_amounts_cents,
-      pecentages=input_data.percentages,
+      percentages=input_data.percentages,
     )
 
     expense = Expense.create(
@@ -61,7 +61,7 @@ class CreateExpenseUseCase:
       total=total,
       paid_by=paid_by,
       participants=participants,
-      strategy=strategy
+      split_strategy=strategy
     )
     self._expenses.save(expense)
     return ExpenseView.from_entity(expense)
