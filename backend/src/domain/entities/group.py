@@ -20,14 +20,16 @@ class Group:
   name: str
   created_by: UserId
   members: list[GroupMember] = field(default_factory=list)
+  closed_at: datetime | None = None
 
   def __post_init__(self) -> None:
     if not self.name.strip():
       raise ValueError("Group name cannot be empty")
     if not any(member.user_id == self.created_by for member in self.members):
-      raise GroupMembershipError("The creator must be a member of the group.")
+      self.members.append(GroupMember(user_id=self.created_by))
 
-  def create(cls, name: str, created_by: UserId) -> Group:
+  @classmethod
+  def create(cls, id: GroupId, name: str, created_by: UserId) -> Group:
     group = cls(id=id, name=name, created_by=created_by)
     return group
 
@@ -49,4 +51,18 @@ class Group:
 
   def member_ids(self) -> list[UserId]:
     return [member.user_id for member in self.members]
-    
+
+  @property
+  def is_closed(self) -> bool: 
+    return self.closed_at is not None
+
+  def close(self) -> None:
+    if self.is_closed:
+      raise DomainError(f"Group {self.id}:{self.name} is already closed.")
+    self.closed_at = datetime.now(timezone.utc)
+
+  def reopen(self) -> None:
+    if not self.is_closed:
+      raise DomainError(f"Group {self.id}:{self.name} is not closed.")
+    self.closed_at = None
+  
