@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+# `src` puts the production packages (`domain`, `application`) on the import path
+# without an editable install; `.` makes `tests.*` importable from nested test dirs.
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config",
+  "--import-mode=importlib",
+]
+xfail_strict = true
+markers = [
+  "known_bug: documents behavior that is currently broken in production code",
+]
