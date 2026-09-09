@@ -73,7 +73,7 @@ class EditExpenseUseCase:
       description=input_data.description,
       total=total,
       participants=participants,
-      split_strategy=strategy,
+      strategy=strategy,
     )
     self._expenses.save(expense)
     return ExpenseView.from_entity(expense)
