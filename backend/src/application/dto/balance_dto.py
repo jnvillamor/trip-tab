@@ -4,6 +4,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict
 
+from domain.services.settlement_suggester import SuggestedPayment
 from domain.value_objects.ids import UserId
 from domain.value_objects.money import Money
 
@@ -58,4 +59,19 @@ class GroupBalancesView(_View):
         )
         for (debtor, creditor), amount in pairwise_balances.items()
       ],
+    )
+
+class SuggestedPaymentView(_View):
+  from_user: str
+  to_user: str
+  amount_cents: int
+  currency: CurrencyCode
+
+  @classmethod
+  def from_domain(cls, payment: SuggestedPayment) -> "SuggestedPaymentView":
+    return cls(
+      from_user=str(payment.from_user),
+      to_user=str(payment.to_user),
+      amount_cents=payment.amount.amount_cents,
+      currency=payment.amount.currency,
     )
