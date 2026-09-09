@@ -9,8 +9,7 @@ from domain.entities.expense import Expense
 from domain.repositories.expense_repository import ExpenseRepository
 from domain.repositories.group_repository import GroupRepository
 from domain.value_objects.ids import GroupId, UserId, ExpenseId
-from domain.value_objects.money import Money
-from domain.value_objects.split_strategy import SplitType
+from domain.value_objects.money import DEFAULT_CURRENCY, Money
 
 @dataclass(frozen=True)
 class CreateExpenseInput:
@@ -46,7 +45,7 @@ class CreateExpenseUseCase:
       if not group.has_member(participant):
         raise NotAuthorizedError(f"User {participant} is not a member of the group {group_id}.")
 
-    total = Money(amount_cents=input_data.total_cents, currency="PHP")
+    total = Money(amount_cents=input_data.total_cents, currency=DEFAULT_CURRENCY)
     strategy = build_split_strategy(
       split_type=input_data.split_type,
       currency=total.currency,
