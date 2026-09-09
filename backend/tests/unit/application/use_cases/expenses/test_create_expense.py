@@ -50,6 +50,7 @@ def an_equal_split(group_id: GroupId, alice: UserId, bob: UserId):
       "group_id": str(group_id),
       "description": "Dinner",
       "total_cents": 10_000,
+      "currency": CURRENCY,
       "paid_by": str(alice),
       "participants_ids": [str(alice), str(bob)],
       "split_type": "equal",
@@ -215,18 +216,63 @@ class TestTheView:
     assert view.deleted is False
     assert view.created_at is not None
 
-  def test_the_expense_is_recorded_in_the_domain_default_currency(self, use_case, an_equal_split):
-    """The input carries no currency, so the use case books everything in PHP."""
-    view = use_case.execute(an_equal_split())
+  def test_the_expense_and_its_splits_share_one_currency(self, use_case, an_equal_split):
+    """A split is a share of the total, so it can never be denominated differently."""
+    view = use_case.execute(an_equal_split(currency="USD"))
 
-    assert view.currency == CURRENCY
-    assert {split.currency for split in view.splits} == {CURRENCY}
+    assert view.currency == "USD"
+    assert {split.currency for split in view.splits} == {"USD"}
 
   def test_is_immutable(self, use_case, an_equal_split):
     view = use_case.execute(an_equal_split())
 
     with pytest.raises(Exception):
       view.description = "Renamed"
+
+
+class TestCurrency:
+  """`currency` is a required input field, but an empty one falls back to the domain default."""
+
+  def test_an_explicit_currency_is_honored(self, use_case, an_equal_split):
+    view = use_case.execute(an_equal_split(currency="USD"))
+
+    assert view.currency == "USD"
+
+  def test_an_empty_currency_falls_back_to_the_domain_default(self, use_case, an_equal_split):
+    view = use_case.execute(an_equal_split(currency=""))
+
+    assert view.currency == CURRENCY
+
+  def test_a_missing_currency_falls_back_to_the_domain_default(self, use_case, an_equal_split):
+    """`currency` is annotated `str`, but `None` is what an omitted request field looks like."""
+    view = use_case.execute(an_equal_split(currency=None))
+
+    assert view.currency == CURRENCY
+
+  @pytest.mark.parametrize("malformed", ["US", "PHPX", "peso"], ids=["short", "long", "word"])
+  def test_a_currency_that_is_not_a_three_letter_code_is_rejected(
+    self, use_case, an_equal_split, malformed: str
+  ):
+    with pytest.raises(ValueError, match="Currency must be a 3-letter ISO code"):
+      use_case.execute(an_equal_split(currency=malformed))
+
+  def test_a_rejected_currency_writes_nothing(self, use_case, expenses, an_equal_split):
+    with pytest.raises(ValueError):
+      use_case.execute(an_equal_split(currency="US"))
+
+    assert expenses.saved == []
+
+  def test_the_currency_is_required(self, group_id: GroupId, alice: UserId, bob: UserId):
+    """It has no default, so a caller cannot forget to say what they spent."""
+    with pytest.raises(TypeError, match="currency"):
+      CreateExpenseInput(
+        group_id=str(group_id),
+        description="Dinner",
+        total_cents=10_000,
+        paid_by=str(alice),
+        participants_ids=[str(alice), str(bob)],
+        split_type="equal",
+      )
 
 
 class TestPersistence:
@@ -359,3 +405,29 @@ class TestInput:
 
     with pytest.raises(Exception):
       input_data.description = "Renamed"
+
+
+class TestKnownGaps:
+  """Behavior the use case currently allows that is worth a second look.
+
+  Each test asserts what happens *today*; fixing the gap should break it on purpose.
+  """
+
+  def test_a_whitespace_only_currency_slips_through_as_an_empty_one(
+    self, use_case, an_equal_split
+  ):
+    """GAP: `"   "` is truthy, so it never hits the `or DEFAULT_CURRENCY` fallback, and it is
+    three characters long, so `Money` accepts it. `ExpenseView` then strips it to `""`, and
+    the expense is booked in no currency at all."""
+    view = use_case.execute(an_equal_split(currency="   "))
+
+    assert view.currency == ""
+    assert {split.currency for split in view.splits} == {""}
+
+  def test_a_currency_code_is_not_upper_cased(self, use_case, an_equal_split):
+    """GAP: `balance_dto.CurrencyCode` upper-cases via `AfterValidator(str.upper)`, but
+    `ExpenseView.currency` is a plain `str`. The same money reads as "usd" on an expense and
+    "USD" on a balance, and `Money._check_currency` compares exactly."""
+    view = use_case.execute(an_equal_split(currency="usd"))
+
+    assert view.currency == "usd"
