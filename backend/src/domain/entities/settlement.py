@@ -44,6 +44,24 @@ class Settlement:
     self.reversed_at = datetime.now(timezone.utc)
 
   @classmethod
+  def create(
+    cls,
+    id: SettlementId,
+    group_id: GroupId,
+    from_user: UserId,
+    to_user: UserId,
+    amount: Money,
+  ) -> "Settlement":
+    """Factory to create a new settlement."""
+    return cls(
+      id=id,
+      group_id=group_id,
+      from_user=from_user,
+      to_user=to_user,
+      amount=amount
+    )
+
+  @classmethod
   def create_reversal(cls, id: SettlementId, original: "Settlement") -> "Settlement":
     """Factory to create a reversal settlement."""
     if original.reversed_at is not None:
