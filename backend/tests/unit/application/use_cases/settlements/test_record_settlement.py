@@ -115,12 +115,23 @@ class TestCurrency:
 
     assert view.currency == "USD"
 
-  @pytest.mark.parametrize("malformed", ["", "US", "PHPX", "peso"], ids=["empty", "short", "long", "word"])
+  @pytest.mark.parametrize(
+    "malformed", ["US", "PHPX", "peso", "1 2"], ids=["short", "long", "word", "digits"]
+  )
   def test_a_currency_that_is_not_a_three_letter_code_is_rejected(
     self, use_case, a_settlement, malformed: str
   ):
     with pytest.raises(ValueError, match="Currency must be a 3-letter ISO code"):
       use_case.execute(a_settlement(currency=malformed))
+
+  @pytest.mark.parametrize("absent", ["", "   "], ids=["empty", "blank"])
+  def test_an_empty_currency_falls_back_to_the_domain_default(
+    self, use_case, a_settlement, absent: str
+  ):
+    """Nothing, or whitespace, reads as "not provided" rather than as a bad code."""
+    view = use_case.execute(a_settlement(currency=absent))
+
+    assert view.currency == CURRENCY
 
   def test_a_rejected_currency_writes_nothing(self, use_case, settlements, a_settlement):
     with pytest.raises(ValueError):

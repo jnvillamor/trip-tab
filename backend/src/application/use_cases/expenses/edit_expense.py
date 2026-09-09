@@ -43,7 +43,7 @@ class EditExpenseUseCase:
       raise NotAuthorizedError(f"User {input_data.requested_by} is not a member of group {input_data.group_id}.")
 
     total = (
-      Money(input_data.total_cents, input_data.currency or expense.total.currency)
+      Money(input_data.total_cents, (input_data.currency or "").strip() or expense.total.currency)
       if input_data.total_cents is not None
       else None
     )

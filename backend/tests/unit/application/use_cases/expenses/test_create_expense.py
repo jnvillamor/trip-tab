@@ -243,6 +243,19 @@ class TestCurrency:
 
     assert view.currency == CURRENCY
 
+  def test_a_whitespace_only_currency_falls_back_to_the_domain_default(
+    self, use_case, an_equal_split
+  ):
+    """Whitespace is not a currency code, so it counts as absent rather than as three
+    characters that happen to pass a length check."""
+    view = use_case.execute(an_equal_split(currency="   "))
+
+    assert view.currency == CURRENCY
+
+  def test_a_currency_that_is_not_letters_is_rejected(self, use_case, an_equal_split):
+    with pytest.raises(ValueError, match="Currency must be a 3-letter ISO code"):
+      use_case.execute(an_equal_split(currency="1 2"))
+
   def test_a_missing_currency_falls_back_to_the_domain_default(self, use_case, an_equal_split):
     """`currency` is annotated `str`, but `None` is what an omitted request field looks like."""
     view = use_case.execute(an_equal_split(currency=None))
@@ -412,18 +425,6 @@ class TestKnownGaps:
 
   Each test asserts what happens *today*; fixing the gap should break it on purpose.
   """
-
-  def test_a_whitespace_only_currency_is_accepted_as_a_currency(
-    self, use_case, an_equal_split
-  ):
-    """GAP: `"   "` is truthy, so it never hits the `or DEFAULT_CURRENCY` fallback, and it is
-    three characters long, so `Money`'s ISO-code check passes it. The expense is booked in a
-    currency of three spaces, which `Money._check_currency` will never match against a real
-    one — so it cannot be added to, or settled against, anything."""
-    view = use_case.execute(an_equal_split(currency="   "))
-
-    assert view.currency == "   "
-    assert {split.currency for split in view.splits} == {"   "}
 
   def test_a_currency_code_is_not_upper_cased(self, use_case, an_equal_split):
     """GAP: `balance_dto.CurrencyCode` upper-cases via `AfterValidator(str.upper)`, but

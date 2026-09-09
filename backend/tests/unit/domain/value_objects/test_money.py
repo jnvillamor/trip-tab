@@ -13,8 +13,15 @@ class TestConstruction:
     with pytest.raises(ValueError, match="integer representing cents"):
       Money(10.5)  # type: ignore[arg-type]
 
-  @pytest.mark.parametrize("code", ["P", "PHPP", ""])
+  @pytest.mark.parametrize(
+    "code",
+    ["P", "PHPP", "", "   ", "1 2", "P4P", "u$d"],
+    ids=["short", "long", "empty", "blank", "digits", "digit-inside", "symbol"],
+  )
   def test_rejects_currency_codes_that_are_not_three_letters(self, code: str):
+    """Three characters is not enough — `"   "` has the right length and means nothing, and
+    `Money._check_currency` compares codes exactly, so a junk code silently isolates the
+    amount from every real one."""
     with pytest.raises(ValueError, match="3-letter ISO code"):
       Money(100, code)
 

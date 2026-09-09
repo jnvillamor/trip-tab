@@ -35,7 +35,7 @@ class RecordSettlementUseCase:
       if not group.has_member(user):
         raise NotAuthorizedError(f"User {user} is not a member of group {input_data.group_id}.")
 
-    amount = Money(input_data.amount_cents, input_data.currency)
+    amount = Money(input_data.amount_cents, (input_data.currency or "").strip() or DEFAULT_CURRENCY)
     settlement = Settlement.create(
       id=SettlementId.new(),
       group_id=group_id,

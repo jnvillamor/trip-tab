@@ -17,7 +17,7 @@ class Money:
   def __post_init__(self) -> None:
     if not isinstance(self.amount_cents, int):
       raise ValueError("Money amount must be an integer representing cents")
-    if len(self.currency) != 3:
+    if len(self.currency) != 3 or not self.currency.isalpha():
       raise ValueError("Currency must be a 3-letter ISO code")
 
   @classmethod

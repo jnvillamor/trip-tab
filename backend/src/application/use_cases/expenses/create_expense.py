@@ -46,7 +46,10 @@ class CreateExpenseUseCase:
       if not group.has_member(participant):
         raise NotAuthorizedError(f"User {participant} is not a member of the group {group_id}.")
 
-    total = Money(amount_cents=input_data.total_cents, currency=input_data.currency or DEFAULT_CURRENCY)
+    total = Money(
+      amount_cents=input_data.total_cents,
+      currency=(input_data.currency or "").strip() or DEFAULT_CURRENCY,
+    )
     strategy = build_split_strategy(
       split_type=input_data.split_type,
       currency=total.currency,
