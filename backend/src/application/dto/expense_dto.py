@@ -6,9 +6,13 @@ from pydantic import BaseModel, ConfigDict
 from domain.entities.expense import Expense
 
 class _View(BaseModel):
-  """Base for read models: immutable, strict about unknown fields, and trims string input."""
+  """Base for read models: immutable and strict about unknown fields.
 
-  model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
+  Deliberately does not trim strings: a view reports what the domain holds, so whitespace
+  that got stored is a bug to surface, not one to hide.
+  """
+
+  model_config = ConfigDict(frozen=True, extra="forbid")
 
 class SplitLineView(_View):
   user_id: str

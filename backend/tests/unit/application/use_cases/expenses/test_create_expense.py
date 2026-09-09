@@ -413,16 +413,17 @@ class TestKnownGaps:
   Each test asserts what happens *today*; fixing the gap should break it on purpose.
   """
 
-  def test_a_whitespace_only_currency_slips_through_as_an_empty_one(
+  def test_a_whitespace_only_currency_is_accepted_as_a_currency(
     self, use_case, an_equal_split
   ):
     """GAP: `"   "` is truthy, so it never hits the `or DEFAULT_CURRENCY` fallback, and it is
-    three characters long, so `Money` accepts it. `ExpenseView` then strips it to `""`, and
-    the expense is booked in no currency at all."""
+    three characters long, so `Money`'s ISO-code check passes it. The expense is booked in a
+    currency of three spaces, which `Money._check_currency` will never match against a real
+    one — so it cannot be added to, or settled against, anything."""
     view = use_case.execute(an_equal_split(currency="   "))
 
-    assert view.currency == ""
-    assert {split.currency for split in view.splits} == {""}
+    assert view.currency == "   "
+    assert {split.currency for split in view.splits} == {"   "}
 
   def test_a_currency_code_is_not_upper_cased(self, use_case, an_equal_split):
     """GAP: `balance_dto.CurrencyCode` upper-cases via `AfterValidator(str.upper)`, but
