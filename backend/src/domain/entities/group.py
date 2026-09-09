@@ -23,7 +23,8 @@ class Group:
   closed_at: datetime | None = None
 
   def __post_init__(self) -> None:
-    if not self.name.strip():
+    self.name = self.name.strip()
+    if not self.name:
       raise ValueError("Group name cannot be empty")
     if not any(member.user_id == self.created_by for member in self.members):
       self.members.append(GroupMember(user_id=self.created_by))

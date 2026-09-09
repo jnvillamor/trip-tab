@@ -34,6 +34,10 @@ class TestCreation:
     with pytest.raises(ValueError, match="name cannot be empty"):
       make_group(name=blank, created_by=alice)
 
+  def test_stores_the_name_trimmed(self, alice: UserId):
+    """Read models report the stored value verbatim, so the padding is removed on the way in."""
+    assert make_group(name="  Palawan Trip  ", created_by=alice).name == "Palawan Trip"
+
 
 class TestCreateFactory:
   def test_the_creator_is_seeded_as_the_first_member(self, alice: UserId):

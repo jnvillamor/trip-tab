@@ -25,11 +25,18 @@ class Expense:
   deleted: bool = False
 
   def __post_init__(self) -> None:
-    if not self.description.strip():
-      raise InvalidExpenseError("Expense description cannot be empty")
+    self.description = self._normalize_description(self.description)
     if not self.total.is_positive():
       raise InvalidExpenseError("Expense total must be positive")
     self._validate_splits_sum_to_total()
+
+  @staticmethod
+  def _normalize_description(description: str) -> str:
+    """Descriptions are stored trimmed, so a stored value always matches what is displayed."""
+    trimmed = description.strip()
+    if not trimmed:
+      raise InvalidExpenseError("Expense description cannot be empty")
+    return trimmed
 
   def _validate_splits_sum_to_total(self) -> None:
     computed = Money.sum([split.owed for split in self.splits], self.total.currency)
@@ -70,7 +77,7 @@ class Expense:
       strategy: SplitStrategy | None = None
   ) -> None:
     if description is not None:
-      self.description = description
+      self.description = self._normalize_description(description)
 
     if total is not None or participants is not None:
       if strategy is None:

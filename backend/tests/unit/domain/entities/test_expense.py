@@ -43,6 +43,10 @@ class TestCreation:
     with pytest.raises(InvalidExpenseError, match="description cannot be empty"):
       make_expense(description=blank, paid_by=alice)
 
+  def test_stores_the_description_trimmed(self, alice):
+    """Read models report the stored value verbatim, so the padding is removed on the way in."""
+    assert make_expense(description="  Dinner  ", paid_by=alice).description == "Dinner"
+
   @pytest.mark.parametrize("cents", [0, -100])
   def test_rejects_a_non_positive_total(self, cents: int, alice):
     with pytest.raises(InvalidExpenseError, match="total must be positive"):

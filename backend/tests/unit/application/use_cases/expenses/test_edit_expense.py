@@ -108,6 +108,20 @@ class TestPartialUpdate:
     assert view.total_cents == 10_000
     assert owed_by(view) == {str(alice): 5_000, str(bob): 5_000}
 
+  @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "blank"])
+  def test_a_blank_description_is_rejected(self, use_case, expenses, an_edit, blank: str):
+    """An edit cannot erase the description any more than `create` can omit it."""
+    with pytest.raises(InvalidExpenseError, match="description cannot be empty"):
+      use_case.execute(an_edit(description=blank))
+
+    assert expenses.saved == []
+
+  def test_a_renamed_description_is_stored_trimmed(self, use_case, expenses, an_edit):
+    view = use_case.execute(an_edit(description="  Late dinner  "))
+
+    assert view.description == "Late dinner"
+    assert expenses.saved[-1].description == "Late dinner"
+
   def test_the_identity_of_the_expense_survives_an_edit(
     self, use_case, an_edit, expense_id: ExpenseId, group_id: GroupId, alice: UserId
   ):
@@ -512,13 +526,6 @@ class TestKnownGaps:
     )
 
     assert owed_by(view) == {str(alice): 5_000, str(bob): 5_000}
-
-  @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "blank"])
-  def test_a_blank_description_is_accepted(self, use_case, expenses, an_edit, blank: str):
-    """GAP: `create` raises InvalidExpenseError for this; `edit` just assigns it."""
-    use_case.execute(an_edit(description=blank))
-
-    assert expenses.saved[-1].description == blank
 
   @pytest.mark.parametrize("amount", [0, -500], ids=["zero", "negative"])
   def test_a_non_positive_total_is_accepted(self, use_case, an_edit, amount: int):
