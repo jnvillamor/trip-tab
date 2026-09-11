@@ -32,7 +32,7 @@ class DynamoDBGroupRepository(GroupRepository):
       return None
 
     members = [
-      GroupMember(user_id=UserId(item["user_id"], joined_at=from_iso(item["joined_at"])))
+      GroupMember(user_id=UserId(item["user_id"]), joined_at=from_iso(item["joined_at"]))
       for item in items
       if item["SK"].startswith(MEMBER_SK_PREFIX)
     ]
@@ -42,21 +42,23 @@ class DynamoDBGroupRepository(GroupRepository):
       name=metadata["name"],
       created_by=UserId(metadata["created_by"]),
       members=members,
-      closed_at=from_iso(metadata["closed_at"]) if "closed_at" in metadata else None
+      closed_at=from_iso(metadata["closed_at"]) if metadata.get("closed_at") else None
     )
 
   def save(self, group: Group) -> None:
     group_id = str(group.id)
 
-    self._table.put_item(Item={
+    metadata = {
       "PK": group_pk(group_id),
       "SK": METADATA_SK,
       "EntityType": ENTITY_ENUM["Group"],
       "id": group_id,
       "name": group.name,
       "created_by": str(group.created_by),
-      "closed_at": group.closed_at.isoformat() if group.closed_at else None
-    })
+    }
+    if group.closed_at is not None:
+      metadata["closed_at"] = to_iso(group.closed_at)
+    self._table.put_item(Item=metadata)
 
     # Save group members
     response = self._table.query(
@@ -74,8 +76,8 @@ class DynamoDBGroupRepository(GroupRepository):
           "group_id": group_id,
           "user_id": user_id,
           "joined_at": to_iso(member.joined_at),
-          "gsi1pk": gsi1pk_user(user_id),
-          "gsi1sk": gsi1sk_group(group_id)
+          "GSI1PK": gsi1pk_user(user_id),
+          "GSI1SK": gsi1sk_group(group_id)
         })
 
     for stale_user_id in existing_user_ids - desired_members.keys():
