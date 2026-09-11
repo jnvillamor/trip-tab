@@ -42,8 +42,8 @@ def gsi1sk_group(group_id: str) -> str:
 
 GSI1PK_GROUP_PREFIX = "GROUP#"
 
-def gsi1sk_expense(group_id: str) -> str:
-  return f"GROUP#{group_id}"
+def gsi1sk_expense(expense_id: str) -> str:
+  return f"EXPENSE#{expense_id}"
 
 GS1SK_EXPENSE_PREFIX = "EXPENSE#"
 
