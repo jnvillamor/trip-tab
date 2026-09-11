@@ -51,7 +51,7 @@ class TestSave:
     repository.save(expense)
 
     item = table.get_item(Key={"PK": f"GROUP#{group_id}", "SK": f"EXPENSE#{expense.id}"})["Item"]
-    assert sorted((s["user_id"], int(s["owed"])) for s in item["splits"]) == sorted(
+    assert sorted((s["user_id"], int(s["owed_cents"])) for s in item["splits"]) == sorted(
       [(str(alice), 5_000), (str(bob), 5_000)]
     )
 

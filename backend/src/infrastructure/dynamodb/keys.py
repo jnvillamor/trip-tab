@@ -45,7 +45,7 @@ GSI1PK_GROUP_PREFIX = "GROUP#"
 def gsi1sk_expense(expense_id: str) -> str:
   return f"EXPENSE#{expense_id}"
 
-GS1SK_EXPENSE_PREFIX = "EXPENSE#"
+GSI1SK_EXPENSE_PREFIX = "EXPENSE#"
 
 # Entities Keys
 ENTITY_ENUM = {

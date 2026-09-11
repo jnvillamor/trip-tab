@@ -47,7 +47,7 @@ class DynamoDBExpenseRepository(ExpenseRepository):
         "splits": [
           {
             "user_id": str(split.user_id),
-            "owed": to_decimal(split.owed.amount_cents),
+            "owed_cents": to_decimal(split.owed.amount_cents),
           } for split in expense.splits
         ],
         "created_at": to_iso(expense.created_at),
@@ -90,7 +90,7 @@ class DynamoDBExpenseRepository(ExpenseRepository):
       splits=[
         SplitLine(
           user_id=UserId(split["user_id"]),
-          owed=Money(from_decimal(split["owed"]), currency)
+          owed=Money(from_decimal(split["owed_cents"]), currency)
         )
         for split in item["splits"]
       ],
