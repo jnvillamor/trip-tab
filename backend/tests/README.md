@@ -1,7 +1,8 @@
 # Tests
 
-Pure unit tests for the domain layer. No I/O, no fixtures on disk, no network — every
-test builds entities in memory and asserts on domain behavior.
+Unit tests. No fixtures on disk, no network, no Docker — domain and application tests
+build entities in memory, and infrastructure tests run against a DynamoDB that moto
+patches into botocore in-process.
 
 ## Running
 
@@ -23,6 +24,7 @@ tests/
   fakes.py            in-memory repository ports, e.g. InMemoryGroupRepository
   unit/domain/        mirrors src/domain/
   unit/application/   mirrors src/application/
+  unit/infrastructure/  mirrors src/infrastructure/; dynamodb/conftest.py builds the table
 ```
 
 Ids validate as UUIDs, so tests cannot write `UserId("alice")`. `id_for(UserId, "alice")`
@@ -44,3 +46,16 @@ Use-case tests drive a real use case against a fake repository from `fakes.py`. 
 deep-copy on read and on write, so a use case that mutates an entity without calling
 `save` leaves the store unchanged and the test fails. `repository.saved` records every
 write, which is how a test asserts that a rejected operation wrote nothing.
+
+## Infrastructure tests
+
+`unit/infrastructure/dynamodb/conftest.py` provides a `table` fixture: a real
+`boto3` Table backed by moto, created with the same schema as
+`infra/local/init/ready.d/10-dynamodb.sh`. Repository tests inject it, so they exercise
+the production boto3 calls — key validation, `Decimal` coercion, upsert semantics —
+without Docker.
+
+Those tests assert the physical key strings (`PK=USER#<id>`, `SK=METADATA`) as literals
+rather than building them from `infrastructure.dynamodb.keys`. A round trip alone cannot
+catch a changed key format, because the write and the read would move together and leave
+already-stored rows orphaned.
