@@ -3,11 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from domain.events.base import AggregateRoot
+from domain.events.group_events import (
+  GroupClosed,
+  GroupCreated,
+  GroupDeleted,
+  GroupReopened,
+  MemberAdded,
+  MemberRemoved
+)
 from domain.exceptions import DomainError
 from domain.value_objects.ids import GroupId, UserId
 
 class GroupMembershipError(DomainError):
   """Raised for invalid membership operations in a group."""
+
+class GroupLifeCycleError(DomainError):
+  """Raised for invalid lifecycle operations on a group (e.g. Closing an already closed group or reopening an open group)."""
 
 @dataclass(frozen=True)
 class GroupMember:
@@ -15,7 +27,7 @@ class GroupMember:
   joined_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 @dataclass
-class Group:
+class Group(AggregateRoot):
   id: GroupId
   name: str
   created_by: UserId
@@ -32,6 +44,7 @@ class Group:
   @classmethod
   def create(cls, id: GroupId, name: str, created_by: UserId) -> Group:
     group = cls(id=id, name=name, created_by=created_by)
+    group.record_event(GroupCreated(group_id=id, created_by=created_by, name=group.name))
     return group
 
   def has_member(self, user_id: UserId) -> bool:
@@ -40,6 +53,7 @@ class Group:
   def add_member(self, user_id: UserId) -> None:
     if self.has_member(user_id):
       raise GroupMembershipError(f"User {user_id} is already a member of the group.")
+    self.record_event(MemberAdded(group_id=self.id, member_id=user_id))
     self.members.append(GroupMember(user_id=user_id))
 
   def remove_member(self, user_id: UserId, *, has_zero_balance: bool) -> None:
@@ -48,6 +62,7 @@ class Group:
       raise GroupMembershipError(f"User {user_id} is not a memeber of {self.id}:{self.name}")
     if not has_zero_balance:
       raise GroupMembershipError(f"User {user_id} has unsettled balances in the group.")
+    self.record_event(MemberRemoved(group_id=self.id, member_id=user_id))
     self.members = [member for member in self.members if member.user_id != user_id]
 
   def member_ids(self) -> list[UserId]:
@@ -59,11 +74,13 @@ class Group:
 
   def close(self) -> None:
     if self.is_closed:
-      raise DomainError(f"Group {self.id}:{self.name} is already closed.")
+      raise GroupLifeCycleError(f"Group {self.id}:{self.name} is already closed.")
+    self.record_event(GroupClosed(group_id=self.id))
     self.closed_at = datetime.now(timezone.utc)
 
   def reopen(self) -> None:
     if not self.is_closed:
-      raise DomainError(f"Group {self.id}:{self.name} is not closed.")
+      raise GroupLifeCycleError(f"Group {self.id}:{self.name} is not closed.")
+    self.record_event(GroupReopened(group_id=self.id))
     self.closed_at = None
   
