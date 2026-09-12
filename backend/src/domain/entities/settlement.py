@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from domain.events.base import AggregateRoot
+from domain.events.settlement_events import SettlementRecorded, SettlementReversed
 from domain.exceptions import DomainError
 from domain.value_objects.ids import GroupId, SettlementId, UserId
 from domain.value_objects.money import Money 
@@ -11,7 +13,7 @@ class InvalidSettlementError(DomainError):
   """Raised for invalid settlement operations."""
 
 @dataclass
-class Settlement:
+class Settlement(AggregateRoot):
   """Records a payment from one user to another within a group."""
 
   id: SettlementId
@@ -53,13 +55,23 @@ class Settlement:
     amount: Money,
   ) -> "Settlement":
     """Factory to create a new settlement."""
-    return cls(
+    settlement = cls(
       id=id,
       group_id=group_id,
       from_user=from_user,
       to_user=to_user,
       amount=amount
     )
+    settlement.record_event(
+      SettlementRecorded(
+        settlement_id=settlement.id,
+        group_id=settlement.group_id,
+        from_user=settlement.from_user,
+        to_user=settlement.to_user,
+        amount=settlement.amount
+      )
+    )
+    return settlement
 
   @classmethod
   def create_reversal(cls, id: SettlementId, original: "Settlement") -> "Settlement":
@@ -69,7 +81,7 @@ class Settlement:
     if original.is_reversal():
       raise InvalidSettlementError(f"{original.id} is a reversal and cannot be reversed again.")
     
-    return cls(
+    reversal = cls(
       id=id,
       group_id=original.group_id,
       from_user=original.to_user,
@@ -77,3 +89,11 @@ class Settlement:
       amount=original.amount,
       reverses=original.id
     )
+    reversal.record_event(
+      SettlementReversed(
+        settlement_id=original.id,
+        reversal_id=reversal.id,
+        group_id=reversal.group_id
+      )
+    )
+    return reversal
