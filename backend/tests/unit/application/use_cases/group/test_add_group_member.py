@@ -8,9 +8,10 @@ from application.use_cases.group.add_group_member import (
   AddGroupMemberUseCase,
 )
 from domain.entities.group import GroupMembershipError
-from domain.value_objects.ids import GroupId
+from domain.events.group_events import MemberAdded
+from domain.value_objects.ids import GroupId, UserId
 from tests.builders import id_for, make_group
-from tests.fakes import InMemoryGroupRepository
+from tests.fakes import InMemoryEventPublisher, InMemoryGroupRepository
 
 
 @pytest.fixture
@@ -24,8 +25,15 @@ def repository(group) -> InMemoryGroupRepository:
 
 
 @pytest.fixture
-def use_case(repository: InMemoryGroupRepository) -> AddGroupMemberUseCase:
-  return AddGroupMemberUseCase(repository)
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
+def use_case(
+  repository: InMemoryGroupRepository, publisher: InMemoryEventPublisher
+) -> AddGroupMemberUseCase:
+  return AddGroupMemberUseCase(repository, publisher)
 
 
 class TestSuccess:
@@ -123,6 +131,108 @@ class TestUntrustedInput:
       use_case.execute(AddGroupMemberInput(group_id="not-a-uuid", user_id=str(bob)))
 
     assert repository.saved == []
+
+
+class TestEvents:
+  """Adding a member is what a notification is built from, so the use case has to hand the
+  event on — the entity records it, but only `execute` gets it to a subscriber."""
+
+  def test_publishes_that_the_member_was_added(self, use_case, publisher, group_id, bob):
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert publisher.types() == ["MemberAdded"]
+
+  def test_the_published_event_names_the_group_and_the_member(
+    self, use_case, publisher, group_id, bob
+  ):
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    event = publisher.published[0]
+    assert isinstance(event, MemberAdded)
+    assert (event.group_id, event.member_id) == (group_id, bob)
+
+  def test_publishes_once_per_call(self, use_case, publisher, group_id, bob):
+    """One `publish` per operation, so a subscriber sees one batch rather than a trickle."""
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_the_write(self, repository, publisher, group_id, bob):
+    """A subscriber that reads the group back must find the new member already there, so the
+    save has to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemoryGroupRepository):
+      def save(self, group):
+        timeline.append("save")
+        super().save(group)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    noting_repository = NotingRepository(
+      [make_group(id=group_id, name="Palawan Trip", created_by=id_for(UserId, "alice"))]
+    )
+    use_case = AddGroupMemberUseCase(noting_repository, NotingPublisher())
+
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert timeline == ["save", "publish"]
+
+  def test_each_call_publishes_only_its_own_event(
+    self, use_case, publisher, group_id, bob, carol
+  ):
+    """A second add must not re-announce the first — the entity is drained by `pull_events`
+    and a rebuilt group starts clean."""
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(carol)))
+
+    assert [len(batch) for batch in publisher.batches] == [1, 1]
+    assert [event.member_id for event in publisher.published] == [bob, carol]
+
+  def test_the_group_keeps_no_events_after_publishing(self, use_case, repository, group_id, bob):
+    """`pull_events` drains the aggregate, so nothing can be published a second time."""
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert repository.get_by_id(group_id).pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_an_unknown_group_publishes_nothing(self, use_case, publisher, bob):
+    with pytest.raises(NotFoundError):
+      use_case.execute(
+        AddGroupMemberInput(group_id=str(id_for(GroupId, "unknown-group")), user_id=str(bob))
+      )
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_a_duplicate_member_publishes_nothing(self, use_case, publisher, group_id, alice):
+    """The entity raises before recording, and the use case never reaches `publish`."""
+    with pytest.raises(GroupMembershipError):
+      use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(alice)))
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, bob):
+    with pytest.raises(ValueError):
+      use_case.execute(AddGroupMemberInput(group_id="not-a-uuid", user_id=str(bob)))
+
+    assert publisher.published == []
+
+  def test_a_failed_second_add_does_not_republish_the_first(
+    self, use_case, publisher, group_id, bob
+  ):
+    use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    with pytest.raises(GroupMembershipError):
+      use_case.execute(AddGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert publisher.types() == ["MemberAdded"]
 
 
 class TestInput:
