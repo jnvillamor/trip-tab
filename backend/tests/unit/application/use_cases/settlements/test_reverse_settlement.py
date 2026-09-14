@@ -18,9 +18,14 @@ from application.use_cases.settlements.reverse_settlement import (
   ReverseSettlementUseCase,
 )
 from domain.entities.settlement import InvalidSettlementError, Settlement
+from domain.events.settlement_events import SettlementReversed
 from domain.value_objects.ids import GroupId, SettlementId, UserId
 from tests.builders import id_for, make_group, make_settlement, money
-from tests.fakes import InMemoryGroupRepository, InMemorySettlementRepository
+from tests.fakes import (
+  InMemoryEventPublisher,
+  InMemoryGroupRepository,
+  InMemorySettlementRepository,
+)
 
 
 @pytest.fixture
@@ -51,10 +56,17 @@ def settlements(original: Settlement) -> InMemorySettlementRepository:
 
 
 @pytest.fixture
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
 def use_case(
-  groups: InMemoryGroupRepository, settlements: InMemorySettlementRepository
+  groups: InMemoryGroupRepository,
+  settlements: InMemorySettlementRepository,
+  publisher: InMemoryEventPublisher,
 ) -> ReverseSettlementUseCase:
-  return ReverseSettlementUseCase(groups, settlements)
+  return ReverseSettlementUseCase(groups, settlements, publisher)
 
 
 @pytest.fixture
@@ -207,6 +219,105 @@ class TestRefusals:
   def test_rejects_an_id_that_is_not_a_uuid(self, use_case, a_reversal, field: str):
     with pytest.raises(ValueError, match="valid UUID string"):
       use_case.execute(a_reversal(**{field: "not-a-uuid"}))
+
+
+class TestEvents:
+  """A reversal puts the money back, so whatever recomputes balances has to hear about it.
+  Both aggregates are drained, but only the reversal records anything — `mark_reversed` is
+  silent, so the single event has to be the one that carries the undo."""
+
+  def test_publishes_that_the_settlement_was_reversed(self, use_case, publisher, a_reversal):
+    use_case.execute(a_reversal())
+
+    assert publisher.types() == ["SettlementReversed"]
+
+  def test_the_published_event_names_both_settlements_and_the_group(
+    self, use_case, publisher, a_reversal, original: Settlement, group_id: GroupId
+  ):
+    view = use_case.execute(a_reversal())
+
+    event = publisher.published[0]
+    assert isinstance(event, SettlementReversed)
+    assert event.settlement_id == original.id
+    assert str(event.reversal_id) == view.id
+    assert event.group_id == group_id
+
+  def test_publishes_once_per_call(self, use_case, publisher, a_reversal):
+    """Two rows are written but one event goes out, so a subscriber sees a single undo."""
+    use_case.execute(a_reversal())
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_both_writes(self, groups, original: Settlement, a_reversal):
+    """A subscriber that reads the ledger back must find the original stamped and the
+    reversal stored, so both saves have to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemorySettlementRepository):
+      def save(self, settlement):
+        timeline.append("save")
+        super().save(settlement)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    use_case = ReverseSettlementUseCase(
+      groups, NotingRepository([original]), NotingPublisher()
+    )
+
+    use_case.execute(a_reversal())
+
+    assert timeline == ["save", "save", "publish"]
+
+  def test_neither_settlement_keeps_events_after_publishing(
+    self, use_case, settlements, a_reversal, original: Settlement, group_id: GroupId
+  ):
+    """`pull_events` drains both aggregates, so nothing can be published a second time."""
+    view = use_case.execute(a_reversal())
+
+    assert settlements.get_by_id(group_id, original.id).pull_events() == []
+    assert settlements.get_by_id(group_id, SettlementId(view.id)).pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_a_second_reversal_publishes_nothing_new(self, use_case, publisher, a_reversal):
+    use_case.execute(a_reversal())
+
+    with pytest.raises(InvalidSettlementError):
+      use_case.execute(a_reversal())
+
+    assert publisher.types() == ["SettlementReversed"]
+
+  def test_an_unknown_group_publishes_nothing(self, use_case, publisher, a_reversal):
+    with pytest.raises(NotFoundError):
+      use_case.execute(a_reversal(group_id=str(id_for(GroupId, "no-such-group"))))
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_an_unknown_settlement_publishes_nothing(self, use_case, publisher, a_reversal):
+    with pytest.raises(NotFoundError):
+      use_case.execute(a_reversal(settlement_id=str(id_for(SettlementId, "no-such-settlement"))))
+
+    assert publisher.published == []
+
+  def test_an_uninvolved_member_publishes_nothing(
+    self, use_case, publisher, a_reversal, carol: UserId
+  ):
+    with pytest.raises(NotAuthorizedError):
+      use_case.execute(a_reversal(requested_by=str(carol)))
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, a_reversal):
+    with pytest.raises(ValueError):
+      use_case.execute(a_reversal(group_id="not-a-uuid"))
+
+    assert publisher.published == []
 
 
 class TestKnownGaps:

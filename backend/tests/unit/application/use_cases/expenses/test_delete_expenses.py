@@ -16,9 +16,10 @@ from application.use_cases.expenses.delete_expenses import (
   DeleteExpenseInput,
   DeleteExpenseUseCase,
 )
+from domain.events.expense_events import ExpenseDeleted
 from domain.value_objects.ids import ExpenseId, GroupId, UserId
 from tests.builders import id_for, make_expense, money
-from tests.fakes import InMemoryExpenseRepository
+from tests.fakes import InMemoryEventPublisher, InMemoryExpenseRepository
 
 
 @pytest.fixture
@@ -46,8 +47,15 @@ def expenses(
 
 
 @pytest.fixture
-def use_case(expenses: InMemoryExpenseRepository) -> DeleteExpenseUseCase:
-  return DeleteExpenseUseCase(expenses)
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
+def use_case(
+  expenses: InMemoryExpenseRepository, publisher: InMemoryEventPublisher
+) -> DeleteExpenseUseCase:
+  return DeleteExpenseUseCase(expenses, publisher)
 
 
 @pytest.fixture
@@ -231,6 +239,103 @@ class TestInput:
       input_data.requested_by = str(id_for(UserId, "bob"))
 
 
+class TestEvents:
+  """A delete takes the expense out of every balance, so whatever recomputes them has to hear
+  about it — the entity records the event, but only `execute` gets it to a subscriber."""
+
+  def test_publishes_that_the_expense_was_deleted(self, use_case, publisher, a_delete):
+    use_case.execute(a_delete())
+
+    assert publisher.types() == ["ExpenseDeleted"]
+
+  def test_the_published_event_names_the_expense_and_its_group(
+    self, use_case, publisher, a_delete, group_id: GroupId, expense_id: ExpenseId
+  ):
+    use_case.execute(a_delete())
+
+    event = publisher.published[0]
+    assert isinstance(event, ExpenseDeleted)
+    assert (event.group_id, event.expense_id) == (group_id, expense_id)
+
+  def test_publishes_once_per_call(self, use_case, publisher, a_delete):
+    """One `publish` per operation, so a subscriber sees one batch rather than a trickle."""
+    use_case.execute(a_delete())
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_the_write(self, expense_id, group_id, alice, bob, a_delete):
+    """A subscriber that reads the expense back must already find it flagged, so the save has
+    to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemoryExpenseRepository):
+      def save(self, expense):
+        timeline.append("save")
+        super().save(expense)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    noting_expenses = NotingRepository(
+      [
+        make_expense(
+          id=expense_id,
+          group_id=group_id,
+          total=money(10_000),
+          paid_by=alice,
+          participants=[alice, bob],
+        )
+      ]
+    )
+    use_case = DeleteExpenseUseCase(noting_expenses, NotingPublisher())
+
+    use_case.execute(a_delete())
+
+    assert timeline == ["save", "publish"]
+
+  def test_the_expense_keeps_no_events_after_publishing(
+    self, use_case, expenses, a_delete, group_id: GroupId, expense_id: ExpenseId
+  ):
+    """`pull_events` drains the aggregate, so nothing can be published a second time."""
+    use_case.execute(a_delete())
+
+    assert expenses.get_by_id(group_id, expense_id).pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_a_second_delete_publishes_nothing(self, use_case, publisher, a_delete):
+    """`mark_deleted` returns early when the flag is already set, so the redundant write —
+    see `TestKnownGaps` — announces nothing."""
+    use_case.execute(a_delete())
+    use_case.execute(a_delete())
+
+    assert publisher.types() == ["ExpenseDeleted"]
+    assert publisher.batches[1] == []
+
+  def test_an_unauthorized_caller_publishes_nothing(self, use_case, publisher, a_delete, bob):
+    with pytest.raises(NotFoundError):
+      use_case.execute(a_delete(requested_by=str(bob)))
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_an_unknown_expense_publishes_nothing(self, use_case, publisher, a_delete):
+    with pytest.raises(NotFoundError):
+      use_case.execute(a_delete(expense_id=str(id_for(ExpenseId, "no-such-expense"))))
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, a_delete):
+    with pytest.raises(ValueError):
+      use_case.execute(a_delete(group_id="not-a-uuid"))
+
+    assert publisher.published == []
+
+
 class TestKnownGaps:
   """Behavior the use case currently allows that is worth a second look.
 
@@ -265,7 +370,7 @@ class TestKnownGaps:
         )
       ]
     )
-    use_case = DeleteExpenseUseCase(expenses)
+    use_case = DeleteExpenseUseCase(expenses, InMemoryEventPublisher())
 
     assert use_case.execute(a_delete()) is None
     assert len(expenses.saved) == 1

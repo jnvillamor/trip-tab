@@ -18,10 +18,15 @@ from application.use_cases.expenses.edit_expense import (
   EditExpenseUseCase,
 )
 from domain.entities.expense import InvalidExpenseError
+from domain.events.expense_events import ExpenseEdited
 from domain.value_objects.ids import ExpenseId, GroupId, UserId
 from domain.value_objects.split_strategy import InvalidSplitStrategyError
 from tests.builders import CURRENCY, id_for, make_expense, make_group, money
-from tests.fakes import InMemoryExpenseRepository, InMemoryGroupRepository
+from tests.fakes import (
+  InMemoryEventPublisher,
+  InMemoryExpenseRepository,
+  InMemoryGroupRepository,
+)
 
 
 @pytest.fixture
@@ -59,10 +64,17 @@ def expenses(
 
 
 @pytest.fixture
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
 def use_case(
-  expenses: InMemoryExpenseRepository, groups: InMemoryGroupRepository
+  expenses: InMemoryExpenseRepository,
+  groups: InMemoryGroupRepository,
+  publisher: InMemoryEventPublisher,
 ) -> EditExpenseUseCase:
-  return EditExpenseUseCase(expenses, groups)
+  return EditExpenseUseCase(expenses, groups, publisher)
 
 
 @pytest.fixture
@@ -367,7 +379,7 @@ class TestMissingRecords:
     self, expenses, an_edit, expense_id: ExpenseId
   ):
     """Reachable only when the two stores disagree — the expense exists but its group is gone."""
-    use_case = EditExpenseUseCase(expenses, InMemoryGroupRepository([]))
+    use_case = EditExpenseUseCase(expenses, InMemoryGroupRepository([]), InMemoryEventPublisher())
 
     with pytest.raises(NotFoundError, match="Group with ID"):
       use_case.execute(an_edit(description="Late dinner"))
@@ -566,9 +578,143 @@ class TestKnownGaps:
         )
       ]
     )
-    use_case = EditExpenseUseCase(expenses, groups)
+    use_case = EditExpenseUseCase(expenses, groups, InMemoryEventPublisher())
 
     view = use_case.execute(an_edit(description="Edited after deletion"))
 
     assert view.deleted is True
     assert view.description == "Edited after deletion"
+
+
+class TestEvents:
+  """An edit moves the money that was already split, so whatever recomputes balances has to
+  hear about it — the entity records the event, but only `execute` gets it to a subscriber."""
+
+  def test_publishes_that_the_expense_was_edited(self, use_case, publisher, an_edit):
+    use_case.execute(an_edit(description="Late dinner"))
+
+    assert publisher.types() == ["ExpenseEdited"]
+
+  def test_the_published_event_carries_the_new_values(
+    self, use_case, publisher, an_edit, group_id: GroupId, expense_id: ExpenseId, alice, bob
+  ):
+    use_case.execute(
+      an_edit(description="Late dinner", total_cents=20_000, split_type="equal")
+    )
+
+    event = publisher.published[0]
+    assert isinstance(event, ExpenseEdited)
+    assert (event.group_id, event.expense_id) == (group_id, expense_id)
+    assert event.new_amount == money(20_000)
+    assert event.new_description == "Late dinner"
+
+  def test_an_unchanged_field_is_reported_at_its_current_value(
+    self, use_case, publisher, an_edit
+  ):
+    """The event is a snapshot, not a delta, so the description survives a total-only edit."""
+    use_case.execute(an_edit(total_cents=20_000, split_type="equal"))
+
+    assert publisher.published[0].new_description == "Dinner"
+
+  def test_publishes_once_per_call(self, use_case, publisher, an_edit):
+    """One `publish` per operation, so a subscriber sees one batch rather than a trickle."""
+    use_case.execute(an_edit(description="Late dinner"))
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_the_write(self, groups, expense_id, group_id, alice, bob, an_edit):
+    """A subscriber that reads the expense back must already find the new values, so the save
+    has to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemoryExpenseRepository):
+      def save(self, expense):
+        timeline.append("save")
+        super().save(expense)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    noting_expenses = NotingRepository(
+      [
+        make_expense(
+          id=expense_id,
+          group_id=group_id,
+          description="Dinner",
+          total=money(10_000),
+          paid_by=alice,
+          participants=[alice, bob],
+        )
+      ]
+    )
+    use_case = EditExpenseUseCase(noting_expenses, groups, NotingPublisher())
+
+    use_case.execute(an_edit(description="Late dinner"))
+
+    assert timeline == ["save", "publish"]
+
+  def test_each_call_publishes_only_its_own_event(self, use_case, publisher, an_edit):
+    """A second edit must not re-announce the first — `pull_events` drains the aggregate and
+    a rebuilt expense starts clean."""
+    use_case.execute(an_edit(description="Late dinner"))
+    use_case.execute(an_edit(description="Very late dinner"))
+
+    assert [len(batch) for batch in publisher.batches] == [1, 1]
+    assert [event.new_description for event in publisher.published] == [
+      "Late dinner",
+      "Very late dinner",
+    ]
+
+  def test_the_expense_keeps_no_events_after_publishing(
+    self, use_case, expenses, an_edit, group_id: GroupId, expense_id: ExpenseId
+  ):
+    """`pull_events` drains the aggregate, so nothing can be published a second time."""
+    use_case.execute(an_edit(description="Late dinner"))
+
+    assert expenses.get_by_id(group_id, expense_id).pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_an_edit_that_changes_nothing_publishes_nothing(self, use_case, publisher, an_edit):
+    """`Expense.edit` returns early when the values match, so there is no event to hand on —
+    even though the use case still saves."""
+    use_case.execute(an_edit())
+
+    assert publisher.published == []
+    assert publisher.batches == [[]]
+
+  def test_a_repeated_edit_publishes_only_the_first(self, use_case, publisher, an_edit):
+    use_case.execute(an_edit(description="Late dinner"))
+    use_case.execute(an_edit(description="Late dinner"))
+
+    assert publisher.types() == ["ExpenseEdited"]
+
+  def test_an_unknown_expense_publishes_nothing(self, use_case, publisher, an_edit):
+    with pytest.raises(NotFoundError):
+      use_case.execute(an_edit(expense_id=str(id_for(ExpenseId, "no-such-expense"))))
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_a_non_member_editor_publishes_nothing(self, use_case, publisher, an_edit, dave):
+    with pytest.raises(NotAuthorizedError):
+      use_case.execute(an_edit(requested_by=str(dave), description="Late dinner"))
+
+    assert publisher.published == []
+
+  def test_an_invalid_edit_publishes_nothing(self, use_case, publisher, an_edit):
+    """A new total with no strategy is refused by the entity before anything is recorded."""
+    with pytest.raises(InvalidExpenseError):
+      use_case.execute(an_edit(total_cents=20_000))
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, an_edit):
+    with pytest.raises(ValueError):
+      use_case.execute(an_edit(group_id="not-a-uuid"))
+
+    assert publisher.published == []

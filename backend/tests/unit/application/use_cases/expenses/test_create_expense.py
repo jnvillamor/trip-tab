@@ -14,10 +14,16 @@ from application.use_cases.expenses.create_expense import (
   CreateExpenseUseCase,
 )
 from domain.entities.expense import InvalidExpenseError
-from domain.value_objects.ids import GroupId, UserId
+from domain.events.expense_events import ExpenseCreated
+from domain.value_objects.ids import ExpenseId, GroupId, UserId
+from domain.value_objects.money import Money
 from domain.value_objects.split_strategy import InvalidSplitStrategyError
 from tests.builders import CURRENCY, id_for, make_group
-from tests.fakes import InMemoryExpenseRepository, InMemoryGroupRepository
+from tests.fakes import (
+  InMemoryEventPublisher,
+  InMemoryExpenseRepository,
+  InMemoryGroupRepository,
+)
 
 
 @pytest.fixture
@@ -35,10 +41,17 @@ def expenses() -> InMemoryExpenseRepository:
 
 
 @pytest.fixture
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
 def use_case(
-  groups: InMemoryGroupRepository, expenses: InMemoryExpenseRepository
+  groups: InMemoryGroupRepository,
+  expenses: InMemoryExpenseRepository,
+  publisher: InMemoryEventPublisher,
 ) -> CreateExpenseUseCase:
-  return CreateExpenseUseCase(groups, expenses)
+  return CreateExpenseUseCase(groups, expenses, publisher)
 
 
 @pytest.fixture
@@ -433,3 +446,125 @@ class TestKnownGaps:
     view = use_case.execute(an_equal_split(currency="usd"))
 
     assert view.currency == "usd"
+
+
+class TestEvents:
+  """A new expense moves everyone's balance, so whatever recomputes or notifies has to hear
+  about it — the entity records the event, but only `execute` gets it to a subscriber."""
+
+  def test_publishes_that_the_expense_was_created(self, use_case, publisher, an_equal_split):
+    use_case.execute(an_equal_split())
+
+    assert publisher.types() == ["ExpenseCreated"]
+
+  def test_the_published_event_describes_the_expense(
+    self, use_case, publisher, an_equal_split, group_id: GroupId, alice: UserId
+  ):
+    view = use_case.execute(an_equal_split())
+
+    event = publisher.published[0]
+    assert isinstance(event, ExpenseCreated)
+    assert event.group_id == group_id
+    assert str(event.expense_id) == view.id
+    assert event.created_by == alice
+    assert event.amount == Money(10_000, CURRENCY)
+    assert event.description == "Dinner"
+
+  def test_the_event_credits_the_payer_not_the_caller(
+    self, use_case, publisher, an_equal_split, bob: UserId
+  ):
+    """`created_by` is taken from `paid_by`, so the event names whoever footed the bill."""
+    use_case.execute(an_equal_split(paid_by=str(bob)))
+
+    assert publisher.published[0].created_by == bob
+
+  def test_publishes_once_per_call(self, use_case, publisher, an_equal_split):
+    """One `publish` per operation, so a subscriber sees one batch rather than a trickle."""
+    use_case.execute(an_equal_split())
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_the_write(self, groups, an_equal_split):
+    """A subscriber that reads the ledger back must already find the expense there, so the
+    save has to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemoryExpenseRepository):
+      def save(self, expense):
+        timeline.append("save")
+        super().save(expense)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    use_case = CreateExpenseUseCase(groups, NotingRepository(), NotingPublisher())
+
+    use_case.execute(an_equal_split())
+
+    assert timeline == ["save", "publish"]
+
+  def test_each_call_publishes_only_its_own_event(self, use_case, publisher, an_equal_split):
+    """A second expense must not re-announce the first — each aggregate carries its own."""
+    first = use_case.execute(an_equal_split())
+    second = use_case.execute(an_equal_split(description="Breakfast"))
+
+    assert [len(batch) for batch in publisher.batches] == [1, 1]
+    assert [str(event.expense_id) for event in publisher.published] == [first.id, second.id]
+
+  def test_the_expense_keeps_no_events_after_publishing(
+    self, use_case, expenses, an_equal_split, group_id: GroupId
+  ):
+    """`pull_events` drains the aggregate, so nothing can be published a second time."""
+    view = use_case.execute(an_equal_split())
+
+    stored = expenses.get_by_id(group_id, ExpenseId(view.id))
+    assert stored.pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_an_unknown_group_publishes_nothing(self, use_case, publisher, an_equal_split):
+    with pytest.raises(NotFoundError):
+      use_case.execute(an_equal_split(group_id=str(id_for(GroupId, "no-such-group"))))
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_a_non_member_publishes_nothing(self, use_case, publisher, an_equal_split, dave: UserId):
+    with pytest.raises(NotAuthorizedError):
+      use_case.execute(an_equal_split(participants_ids=[str(dave)]))
+
+    assert publisher.published == []
+
+  def test_an_invalid_split_publishes_nothing(
+    self, use_case, publisher, an_equal_split, alice: UserId, bob: UserId
+  ):
+    """The entity raises before recording, and the use case never reaches `publish`."""
+    with pytest.raises((InvalidSplitStrategyError, InvalidExpenseError)):
+      use_case.execute(
+        an_equal_split(
+          split_type="exact",
+          exact_amounts_cents={str(alice): 1_000, str(bob): 1_000},
+        )
+      )
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, an_equal_split):
+    with pytest.raises(ValueError):
+      use_case.execute(an_equal_split(group_id="not-a-uuid"))
+
+    assert publisher.published == []
+
+  def test_a_failed_create_does_not_republish_an_earlier_one(
+    self, use_case, publisher, an_equal_split, dave: UserId
+  ):
+    use_case.execute(an_equal_split())
+
+    with pytest.raises(NotAuthorizedError):
+      use_case.execute(an_equal_split(participants_ids=[str(dave)]))
+
+    assert publisher.types() == ["ExpenseCreated"]

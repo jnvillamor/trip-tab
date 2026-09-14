@@ -18,9 +18,14 @@ from application.use_cases.settlements.record_settlement import (
   RecordSettlementUseCase,
 )
 from domain.entities.settlement import InvalidSettlementError
-from domain.value_objects.ids import GroupId, UserId
+from domain.events.settlement_events import SettlementRecorded
+from domain.value_objects.ids import GroupId, SettlementId, UserId
 from tests.builders import CURRENCY, id_for, make_group, money
-from tests.fakes import InMemoryGroupRepository, InMemorySettlementRepository
+from tests.fakes import (
+  InMemoryEventPublisher,
+  InMemoryGroupRepository,
+  InMemorySettlementRepository,
+)
 
 
 @pytest.fixture
@@ -39,10 +44,17 @@ def settlements() -> InMemorySettlementRepository:
 
 
 @pytest.fixture
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
 def use_case(
-  groups: InMemoryGroupRepository, settlements: InMemorySettlementRepository
+  groups: InMemoryGroupRepository,
+  settlements: InMemorySettlementRepository,
+  publisher: InMemoryEventPublisher,
 ) -> RecordSettlementUseCase:
-  return RecordSettlementUseCase(groups, settlements)
+  return RecordSettlementUseCase(groups, settlements, publisher)
 
 
 @pytest.fixture
@@ -215,7 +227,9 @@ class TestMissingGroup:
     self, settlements, a_settlement, dave: UserId
   ):
     """With no group there is nobody to be a member of, so the miss is reported as not found."""
-    use_case = RecordSettlementUseCase(InMemoryGroupRepository([]), settlements)
+    use_case = RecordSettlementUseCase(
+      InMemoryGroupRepository([]), settlements, InMemoryEventPublisher()
+    )
 
     with pytest.raises(NotFoundError, match="not found"):
       use_case.execute(a_settlement(from_user=str(dave)))
@@ -402,8 +416,124 @@ class TestKnownGaps:
     rather than decided."""
     group = make_group(id=group_id, created_by=alice, members=[bob])
     group.close()
-    use_case = RecordSettlementUseCase(InMemoryGroupRepository([group]), settlements)
+    use_case = RecordSettlementUseCase(
+      InMemoryGroupRepository([group]), settlements, InMemoryEventPublisher()
+    )
 
     view = use_case.execute(a_settlement())
 
     assert view.amount_cents == 5_000
+
+
+class TestEvents:
+  """A settlement changes what everyone owes, so whatever recomputes or notifies has to hear
+  about it — the entity records the event, but only `execute` gets it to a subscriber."""
+
+  def test_publishes_that_the_settlement_was_recorded(self, use_case, publisher, a_settlement):
+    use_case.execute(a_settlement())
+
+    assert publisher.types() == ["SettlementRecorded"]
+
+  def test_the_published_event_describes_the_payment(
+    self, use_case, publisher, a_settlement, group_id: GroupId, alice: UserId, bob: UserId
+  ):
+    view = use_case.execute(a_settlement())
+
+    event = publisher.published[0]
+    assert isinstance(event, SettlementRecorded)
+    assert str(event.settlement_id) == view.id
+    assert event.group_id == group_id
+    assert (event.from_user, event.to_user) == (alice, bob)
+    assert event.amount == money(5_000)
+
+  def test_publishes_once_per_call(self, use_case, publisher, a_settlement):
+    """One `publish` per operation, so a subscriber sees one batch rather than a trickle."""
+    use_case.execute(a_settlement())
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_the_write(self, groups, a_settlement):
+    """A subscriber that reads the ledger back must already find the settlement there, so the
+    save has to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemorySettlementRepository):
+      def save(self, settlement):
+        timeline.append("save")
+        super().save(settlement)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    use_case = RecordSettlementUseCase(groups, NotingRepository(), NotingPublisher())
+
+    use_case.execute(a_settlement())
+
+    assert timeline == ["save", "publish"]
+
+  def test_each_call_publishes_only_its_own_event(self, use_case, publisher, a_settlement):
+    """A second settlement must not re-announce the first — each aggregate carries its own."""
+    first = use_case.execute(a_settlement())
+    second = use_case.execute(a_settlement(amount_cents=1_000))
+
+    assert [len(batch) for batch in publisher.batches] == [1, 1]
+    assert [str(event.settlement_id) for event in publisher.published] == [first.id, second.id]
+
+  def test_the_settlement_keeps_no_events_after_publishing(
+    self, use_case, settlements, a_settlement, group_id: GroupId
+  ):
+    """`pull_events` drains the aggregate, so nothing can be published a second time."""
+    view = use_case.execute(a_settlement())
+
+    stored = settlements.get_by_id(group_id, SettlementId(view.id))
+    assert stored.pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_an_unknown_group_publishes_nothing(self, use_case, publisher, a_settlement):
+    with pytest.raises(NotFoundError):
+      use_case.execute(a_settlement(group_id=str(id_for(GroupId, "no-such-group"))))
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_a_non_member_publishes_nothing(self, use_case, publisher, a_settlement, dave: UserId):
+    with pytest.raises(NotAuthorizedError):
+      use_case.execute(a_settlement(from_user=str(dave)))
+
+    assert publisher.published == []
+
+  def test_a_self_payment_publishes_nothing(
+    self, use_case, publisher, a_settlement, alice: UserId
+  ):
+    """The entity raises before recording, and the use case never reaches `publish`."""
+    with pytest.raises(InvalidSettlementError):
+      use_case.execute(a_settlement(to_user=str(alice)))
+
+    assert publisher.published == []
+
+  def test_a_non_positive_amount_publishes_nothing(self, use_case, publisher, a_settlement):
+    with pytest.raises(InvalidSettlementError):
+      use_case.execute(a_settlement(amount_cents=0))
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, a_settlement):
+    with pytest.raises(ValueError):
+      use_case.execute(a_settlement(group_id="not-a-uuid"))
+
+    assert publisher.published == []
+
+  def test_a_failed_settlement_does_not_republish_an_earlier_one(
+    self, use_case, publisher, a_settlement, dave: UserId
+  ):
+    use_case.execute(a_settlement())
+
+    with pytest.raises(NotAuthorizedError):
+      use_case.execute(a_settlement(to_user=str(dave)))
+
+    assert publisher.types() == ["SettlementRecorded"]

@@ -13,11 +13,13 @@ from application.use_cases.group.remove_group_member import (
   RemoveGroupMemberUseCase,
 )
 from domain.entities.group import GroupMembershipError
+from domain.events.group_events import MemberRemoved
 from domain.value_objects.ids import GroupId, UserId
 from domain.value_objects.money import CurrencyMismatchError, Money
 from domain.value_objects.split_strategy import SplitLine
 from tests.builders import id_for, make_expense, make_group, make_settlement, money, split_evenly
 from tests.fakes import (
+  InMemoryEventPublisher,
   InMemoryExpenseRepository,
   InMemoryGroupRepository,
   InMemorySettlementRepository,
@@ -42,12 +44,18 @@ def settlements() -> InMemorySettlementRepository:
 
 
 @pytest.fixture
+def publisher() -> InMemoryEventPublisher:
+  return InMemoryEventPublisher()
+
+
+@pytest.fixture
 def use_case(
   groups: InMemoryGroupRepository,
   expenses: InMemoryExpenseRepository,
   settlements: InMemorySettlementRepository,
+  publisher: InMemoryEventPublisher,
 ) -> RemoveGroupMemberUseCase:
-  return RemoveGroupMemberUseCase(groups, expenses, settlements)
+  return RemoveGroupMemberUseCase(groups, expenses, settlements, publisher)
 
 
 def owes(*, group_id: GroupId, debtor: UserId, creditor: UserId, cents: int = 5_000):
@@ -317,6 +325,111 @@ class TestUntrustedInput:
     assert groups.saved == []
     assert expenses.queried_groups == []
     assert settlements.queried_groups == []
+
+
+class TestEvents:
+  """A departure has to reach whatever recomputes a group's roster, so the use case hands the
+  recorded event on — the entity records it, but only `execute` gets it to a subscriber."""
+
+  def test_publishes_that_the_member_was_removed(self, use_case, publisher, group_id, bob):
+    use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert publisher.types() == ["MemberRemoved"]
+
+  def test_the_published_event_names_the_group_and_the_member(
+    self, use_case, publisher, group_id: GroupId, bob: UserId
+  ):
+    use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    event = publisher.published[0]
+    assert isinstance(event, MemberRemoved)
+    assert (event.group_id, event.member_id) == (group_id, bob)
+
+  def test_publishes_once_per_call(self, use_case, publisher, group_id: GroupId, bob: UserId):
+    """One `publish` per operation, so a subscriber sees one batch rather than a trickle."""
+    use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 1
+
+  def test_publishes_after_the_write(self, expenses, settlements, group_id, alice, bob):
+    """A subscriber that reads the group back must already find the member gone, so the save
+    has to land first."""
+    timeline: list[str] = []
+
+    class NotingRepository(InMemoryGroupRepository):
+      def save(self, group):
+        timeline.append("save")
+        super().save(group)
+
+    class NotingPublisher(InMemoryEventPublisher):
+      def publish(self, events):
+        if events:
+          timeline.append("publish")
+        super().publish(events)
+
+    noting_groups = NotingRepository(
+      [make_group(id=group_id, name="Palawan Trip", created_by=alice, members=[bob])]
+    )
+    use_case = RemoveGroupMemberUseCase(
+      noting_groups, expenses, settlements, NotingPublisher()
+    )
+
+    use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert timeline == ["save", "publish"]
+
+  def test_the_group_keeps_no_events_after_publishing(
+    self, use_case, groups, group_id: GroupId, bob: UserId
+  ):
+    """`pull_events` drains the aggregate, so nothing can be published a second time."""
+    use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert groups.get_by_id(group_id).pull_events() == []
+
+
+class TestNothingIsPublishedOnFailure:
+  def test_an_unsettled_member_publishes_nothing(
+    self, use_case, publisher, expenses, group_id: GroupId, alice: UserId, bob: UserId
+  ):
+    """The entity raises before recording, and the use case never reaches `publish`."""
+    expenses.save(owes(group_id=group_id, debtor=bob, creditor=alice))
+
+    with pytest.raises(GroupMembershipError):
+      use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert publisher.published == []
+    assert publisher.batches == []
+
+  def test_a_non_member_publishes_nothing(self, use_case, publisher, group_id, carol: UserId):
+    with pytest.raises(GroupMembershipError):
+      use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(carol)))
+
+    assert publisher.published == []
+
+  def test_an_unknown_group_publishes_nothing(self, use_case, publisher, bob: UserId):
+    with pytest.raises(NotFoundError):
+      use_case.execute(
+        RemoveGroupMemberInput(group_id=str(id_for(GroupId, "unknown-group")), user_id=str(bob))
+      )
+
+    assert publisher.published == []
+
+  def test_a_malformed_id_publishes_nothing(self, use_case, publisher, bob: UserId):
+    with pytest.raises(ValueError):
+      use_case.execute(RemoveGroupMemberInput(group_id="not-a-uuid", user_id=str(bob)))
+
+    assert publisher.published == []
+
+  def test_a_failed_second_removal_does_not_republish_the_first(
+    self, use_case, publisher, group_id: GroupId, bob: UserId
+  ):
+    use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    with pytest.raises(GroupMembershipError):
+      use_case.execute(RemoveGroupMemberInput(group_id=str(group_id), user_id=str(bob)))
+
+    assert publisher.types() == ["MemberRemoved"]
 
 
 class TestInput:
