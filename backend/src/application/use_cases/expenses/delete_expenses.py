@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from application.exceptions import NotFoundError
+from domain.events.publisher import EventPublisher
 from domain.repositories.expense_repository import ExpenseRepository
 from domain.value_objects.ids import ExpenseId, GroupId, UserId
 
@@ -13,8 +14,9 @@ class DeleteExpenseInput:
   requested_by: str
 
 class DeleteExpenseUseCase:
-  def __init__(self, expense_repository: ExpenseRepository):
+  def __init__(self, expense_repository: ExpenseRepository, event_publisher: EventPublisher):
     self._expenses = expense_repository
+    self._publisher = event_publisher
 
   def execute(self, input_data: DeleteExpenseInput) -> None:
     group_id = GroupId(input_data.group_id)
@@ -31,3 +33,4 @@ class DeleteExpenseUseCase:
 
     expense.mark_deleted()
     self._expenses.save(expense)
+    self._publisher.publish(expense.pull_events())

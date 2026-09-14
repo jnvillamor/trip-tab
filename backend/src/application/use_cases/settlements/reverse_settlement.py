@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from application.exceptions import NotAuthorizedError, NotFoundError
 from application.dto.settlement_dto import SettlementView
 from domain.entities.settlement import Settlement
+from domain.events.publisher import EventPublisher
 from domain.repositories.group_repository import GroupRepository
 from domain.repositories.settlement_repository import SettlementRepository
 from domain.value_objects.ids import GroupId, SettlementId, UserId
@@ -16,9 +17,15 @@ class ReverseSettlementInput:
   requested_by: str
 
 class ReverseSettlementUseCase:
-  def __init__(self, group_repository: GroupRepository, settlement_repository: SettlementRepository):
+  def __init__(
+    self,
+    group_repository: GroupRepository,
+    settlement_repository: SettlementRepository,
+    event_publisher: EventPublisher,
+  ):
     self._groups = group_repository
     self._settlements = settlement_repository
+    self._publisher = event_publisher
 
   def execute(self, input_data: ReverseSettlementInput) -> SettlementView:
     group_id = GroupId(input_data.group_id)
@@ -45,5 +52,6 @@ class ReverseSettlementUseCase:
 
     self._settlements.save(original)
     self._settlements.save(reversal)
+    self._publisher.publish([*original.pull_events(), *reversal.pull_events()])
 
     return SettlementView.from_entity(reversal)

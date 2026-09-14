@@ -6,6 +6,7 @@ from application.dto.expense_dto import ExpenseView
 from application.exceptions import NotFoundError, NotAuthorizedError
 from application.support.split_strategy_builder import build_split_strategy 
 from domain.entities.expense import Expense
+from domain.events.publisher import EventPublisher
 from domain.repositories.expense_repository import ExpenseRepository
 from domain.repositories.group_repository import GroupRepository
 from domain.value_objects.ids import GroupId, UserId, ExpenseId
@@ -28,9 +29,11 @@ class CreateExpenseUseCase:
     self,
     group_repository: GroupRepository,
     expense_repository: ExpenseRepository,
+    event_publisher: EventPublisher,
   ):
     self._groups = group_repository
     self._expenses = expense_repository
+    self._publisher = event_publisher
 
   def execute(self, input_data: CreateExpenseInput) -> ExpenseView:
     group_id = GroupId(input_data.group_id)
@@ -67,4 +70,5 @@ class CreateExpenseUseCase:
       split_strategy=strategy
     )
     self._expenses.save(expense)
+    self._publisher.publish(expense.pull_events())
     return ExpenseView.from_entity(expense)

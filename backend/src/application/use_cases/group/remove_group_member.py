@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from application.dto.group_dto import GroupView
 from application.exceptions import NotFoundError
 from domain.entities.group import Group
+from domain.events.publisher import EventPublisher
 from domain.repositories.expense_repository import ExpenseRepository
 from domain.repositories.group_repository import GroupRepository
 from domain.repositories.settlement_repository import SettlementRepository
@@ -24,10 +25,12 @@ class RemoveGroupMemberUseCase:
     group_repository: GroupRepository,
     expense_repository: ExpenseRepository,
     settlement_repository: SettlementRepository,
+    event_publisher: EventPublisher,
   ):
     self._groups = group_repository
     self._expenses = expense_repository
     self._settlements = settlement_repository
+    self._publisher = event_publisher
 
   def execute(self, input_data: RemoveGroupMemberInput) -> GroupView:
     group_id = GroupId(input_data.group_id)
@@ -47,4 +50,5 @@ class RemoveGroupMemberUseCase:
 
     group.remove_member(user_id, has_zero_balance=has_zero_balance)
     self._groups.save(group)
+    self._publisher.publish(group.pull_events())
     return GroupView.from_entity(group)

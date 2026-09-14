@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from application.dto.expense_dto import ExpenseView
 from application.exceptions import NotFoundError, NotAuthorizedError
 from application.support.split_strategy_builder import build_split_strategy
+from domain.events.publisher import EventPublisher
 from domain.repositories.expense_repository import ExpenseRepository
 from domain.repositories.group_repository import GroupRepository
 from domain.value_objects.ids import ExpenseId, GroupId, UserId
@@ -24,9 +25,15 @@ class EditExpenseInput:
   percentages: dict[str, float] | None = None
 
 class EditExpenseUseCase:
-  def __init__(self, expense_repository: ExpenseRepository, group_repository: GroupRepository):
+  def __init__(
+    self,
+    expense_repository: ExpenseRepository,
+    group_repository: GroupRepository,
+    event_publisher: EventPublisher,
+  ):
     self._expenses = expense_repository
     self._groups = group_repository
+    self._publisher = event_publisher
 
   def execute(self, input_data: EditExpenseInput) -> ExpenseView:
     group_id = GroupId(input_data.group_id)
@@ -76,4 +83,5 @@ class EditExpenseUseCase:
       strategy=strategy,
     )
     self._expenses.save(expense)
+    self._publisher.publish(expense.pull_events())
     return ExpenseView.from_entity(expense)
